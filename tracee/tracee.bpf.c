@@ -1550,6 +1550,21 @@ struct bpf_raw_tracepoint_args *ctx
     return 0;
 }
 
+// include/trace/events/io_uring.h:
+// TP_PROTO(int fd, void *ctx, u32 sq_entries, u32 cq_entries, u32 flags)
+SEC("raw_tracepoint/io_uring_create")
+int tracepoint__io_uring_create(
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 17, 0)
+struct trace_event_raw_sys_exit *args
+#else
+struct bpf_raw_tracepoint_args *ctx
+#endif
+)
+{
+    
+    return 0;
+}
+
 SEC("raw_tracepoint/sys_execve")
 int syscall__execve(void *ctx)
 {
