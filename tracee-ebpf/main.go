@@ -29,6 +29,7 @@ var bpfBundleInjected embed.FS
 var version string
 
 func main() {
+
 	app := &cli.App{
 		Name:    "Tracee",
 		Usage:   "Trace OS events and syscalls using eBPF",
