@@ -7,6 +7,9 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
+	"net/http"
+	"net/http/pprof"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,8 +30,22 @@ var buildPolicy string
 //go:embed "dist/tracee.bpf/*"
 var bpfBundleInjected embed.FS
 var version string
+func hiHandler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("hi"))
+}
 
 func main() {
+	r := http.NewServeMux()
+	r.HandleFunc("/", hiHandler)
+
+	// Register pprof handlers
+	r.HandleFunc("/debug/pprof/", pprof.Index)
+	r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	go http.ListenAndServe("127.0.0.1:8080", r)
 
 	app := &cli.App{
 		Name:    "Tracee",

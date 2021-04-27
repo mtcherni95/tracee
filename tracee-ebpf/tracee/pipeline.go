@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/aquasecurity/tracee/tracee-ebpf/tracee/external"
 	"strconv"
 	"sync"
-
-	"github.com/aquasecurity/tracee/tracee-ebpf/tracee/external"
 )
 
 func (t *Tracee) runEventPipeline(done <-chan struct{}) error {
@@ -55,9 +54,112 @@ func (t *Tracee) decodeRawEvent(done <-chan struct{}) (<-chan RawEvent, <-chan e
 		defer close(out)
 		defer close(errc)
 		for dataRaw := range t.eventsChannel {
+			// read from file
 			dataBuff := bytes.NewBuffer(dataRaw)
 			var ctx context
-			err := binary.Read(dataBuff, binary.LittleEndian, &ctx)
+			/*
+			type context struct {
+				Ts       uint64
+				Pid      uint32
+				Tid      uint32
+				Ppid     uint32
+				HostPid  uint32
+				HostTid  uint32
+				HostPpid uint32
+				Uid      uint32
+				MntID    uint32
+				PidID    uint32
+				Comm     [16]byte
+				UtsName  [16]byte
+				EventID  int32
+				Retval   int64
+				StackID  uint32
+				Argnum   uint8
+				_        [3]byte //padding
+}
+			 */
+			err := binary.Read(dataBuff, binary.LittleEndian, &ctx.Ts)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Pid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Tid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Ppid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.HostPid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.HostTid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.HostPpid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Uid)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.MntID)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.PidID)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Comm)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.UtsName)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.EventID)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Retval)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.StackID)
+			if err != nil {
+				errc <- err
+				continue
+			}
+			err = binary.Read(dataBuff, binary.LittleEndian, &ctx.Argnum)
+			if err != nil {
+				errc <- err
+				continue
+			}
+
+			_, err = readByteSliceFromBuff(dataBuff, 3)
 			if err != nil {
 				errc <- err
 				continue
@@ -94,6 +196,7 @@ func (t *Tracee) processRawEvent(done <-chan struct{}, in <-chan RawEvent) (<-ch
 			if !t.shouldProcessEvent(rawEvent) {
 				continue
 			}
+
 			err := t.processEvent(&rawEvent.Ctx, rawEvent.RawArgs)
 			if err != nil {
 				errc <- err

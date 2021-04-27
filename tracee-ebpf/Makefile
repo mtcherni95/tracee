@@ -42,7 +42,7 @@ build: $(OUT_BIN)
 go_env := GOOS=linux GOARCH=$(ARCH:x86_64=amd64) CC=$(CMD_CLANG) CGO_CFLAGS="-I $(abspath $(LIBBPF_HEADERS))" CGO_LDFLAGS="$(abspath $(LIBBPF_OBJ))"
 ifndef DOCKER
 $(OUT_BIN): $(LIBBPF_HEADERS) $(LIBBPF_OBJ) $(filter-out *_test.go,$(GO_SRC)) $(BPF_BUNDLE) | $(OUT_DIR)
-	$(go_env) go build -v -o $(OUT_BIN) \
+	$(go_env) go build -v -work -o $(OUT_BIN) \
 	-ldflags "-extldflags=-static -X main.version=$(VERSION)"
 else 
 $(OUT_BIN): $(DOCKER_BUILDER) | $(OUT_DIR)
