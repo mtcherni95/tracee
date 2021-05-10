@@ -1,4 +1,12 @@
 package libbpfgo
+import "C"
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"syscall"
+	"unsafe"
+)
 
 /*
 #cgo LDFLAGS: -lelf -lz -lbpf
@@ -17,7 +25,36 @@ package libbpfgo
 #include <string.h>
 #include <unistd.h>
 
+typedef struct A {
+	int size;
+	__u32 ctx;
+	void* ptr;
+} MyData;
+
 extern void perfCallback(void *ctx, int cpu, void *data, __u32 size);
+extern void perfCallbackv2(MyData* my_data, __u32 size);
+
+MyData myEvents[1000] = {0};
+void myPerfCallback(void *ctx, int cpu, void *data, __u32 size) {
+	static int i = 0;
+	myEvents[i].ptr = malloc(size);
+	myEvents[i].size = size;
+	myEvents[i].ctx = (int)ctx;
+
+	memcpy(myEvents[i].ptr, data, size);
+	if (i == 1000) {
+		perfCallbackv2(myEvents, 1000);
+		int j = 0;
+		for (j = 0; j <= i; j++) {
+			free(myEvents[j].ptr);
+		}
+		i = 0;
+	} else {
+		i++;
+		printf("i is: %d\n", i);
+	}
+}
+
 extern void perfLostCallback(void *ctx, int cpu, __u64 cnt);
 
 extern int ringbufferCallback(void *ctx, void *data, size_t size);
@@ -48,11 +85,12 @@ struct ring_buffer * init_ring_buf(int map_fd) {
 struct perf_buffer * init_perf_buf(int map_fd, int page_cnt) {
     struct perf_buffer_opts pb_opts = {};
     struct perf_buffer *pb = NULL;
-    pb_opts.sample_cb = perfCallback;
+    pb_opts.sample_cb = myPerfCallback;
     pb_opts.lost_cb = perfLostCallback;
     __u64 ctx = map_fd;
     pb_opts.ctx = (void*)ctx;
     pb = perf_buffer__new(map_fd, page_cnt, &pb_opts);
+	printf("map fd: %d\n", map_fd);
     if (pb < 0) {
         fprintf(stderr, "Failed to initialize perf buffer!\n");
         return NULL;
@@ -176,14 +214,6 @@ err_out:
 */
 import "C"
 
-import (
-	"fmt"
-	"strings"
-	"sync"
-	"syscall"
-	"unsafe"
-)
-
 type Module struct {
 	obj      *C.struct_bpf_object
 	links    []*BPFLink
@@ -223,6 +253,7 @@ type BPFLink struct {
 
 type PerfBuffer struct {
 	pb     *C.struct_perf_buffer
+	pbv2   Reader
 	bpfMap *BPFMap
 	stop   chan struct{}
 	closed bool
@@ -730,13 +761,15 @@ func (m *Module) InitPerfBuf(mapName string, eventsChan chan []byte, lostChan ch
 	}
 	eventChannels[ctx] = eventsChan
 	lostChannels[ctx] = lostChan
-	pb := C.init_perf_buf(bpfMap.fd, C.int(pageCnt))
-	if pb == nil {
-		return nil, fmt.Errorf("failed to initialize perf buffer")
-	}
+	//pb := C.init_perf_buf(bpfMap.fd, C.int(pageCnt))
+	//if pb == nil {
+	//	return nil, fmt.Errorf("failed to initialize perf buffer")
+	//}
+	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	pbv2, err := InitPerfBufV2(int(bpfMap.fd), pageCnt)
 
 	perfBuf := &PerfBuffer{
-		pb:     pb,
+		pbv2:   *pbv2,
 		bpfMap: bpfMap,
 	}
 	m.perfBufs = append(m.perfBufs, perfBuf)
@@ -746,7 +779,8 @@ func (m *Module) InitPerfBuf(mapName string, eventsChan chan []byte, lostChan ch
 func (pb *PerfBuffer) Start() {
 	pb.stop = make(chan struct{})
 	pb.wg.Add(1)
-	go pb.poll()
+	//go pb.poll()
+	go pb.pbv2.Read()
 }
 
 func (pb *PerfBuffer) Stop() {
@@ -807,6 +841,29 @@ func (pb *PerfBuffer) poll() error {
 				if syscall.Errno(-err) == syscall.EINTR {
 					continue
 				}
+				return fmt.Errorf("error polling perf buffer: %d", err)
+			}
+		}
+	}
+}
+
+func (pb *PerfBuffer) pollV2() error {
+	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	defer pb.wg.Done()
+
+	for {
+		select {
+		case <-pb.stop:
+			return nil
+		default:
+			fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+			err := pb.pbv2.Read()
+			if err != nil {
+				// TODO need to understand if it is EINTR
+				fmt.Println("GOT ERRORRRRR!!!!")
+				//if syscall.Errno(err) == syscall.EINTR {
+				//	continue
+				//}
 				return fmt.Errorf("error polling perf buffer: %d", err)
 			}
 		}
