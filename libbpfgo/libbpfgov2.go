@@ -1,6 +1,5 @@
 package libbpfgo
 
-import "C"
 import (
 	"encoding/binary"
 	"errors"
@@ -21,10 +20,6 @@ var (
 	errEOR    = errors.New("end of ring")
 )
 
-
-type PerfCallbackV2 func(uintptr, []byte)
-type PerfLostCallbackV2 func(uintptr, uint64)
-
 // perfEventHeader must match 'struct perf_event_header` in <linux/perf_event.h>.
 type perfEventHeader struct {
 	Type uint32
@@ -33,6 +28,7 @@ type perfEventHeader struct {
 }
 
 type  Reader struct {
+	ctx uintptr
 	origFd int
 
 	// mu protects read/write access to the Reader structure with the
@@ -67,6 +63,7 @@ type perfEventRing struct {
 	cpu  int
 	mmap []byte
 	*ringReader
+	ctx uintptr
 }
 
 type ringReader struct {
@@ -95,8 +92,6 @@ type Record struct {
 	// the ring buffer was full.
 	LostSamples uint64
 
-	EventsCallback PerfCallbackV2
-	LostEventsCallback PerfLostCallbackV2
 }
 
 var nativeEndian binary.ByteOrder
@@ -118,6 +113,7 @@ func initNativeEndian() {
 }
 
 func perfCallbackV2(ctx uintptr, b []byte) {
+	//fmt.Println(b)
 	eventChannels[ctx] <- b
 }
 
@@ -196,7 +192,13 @@ func CPUsAmonut() (int, error) {
 }
 
 func (rr *ringReader) loadHead() {
+	//m.Lock()
+	//if &rr == nil || &rr.meta == nil {
+	//	m.Unlock()
+	//	return
+	//}
 	rr.head = atomic.LoadUint64(&rr.meta.Data_head)
+	//m.Unlock()
 }
 
 // TODO this is the THIRD func
@@ -210,12 +212,13 @@ func createPerfEvent(cpu, watermark int /* TODO understand what watermark is */)
 		Config:      unix.PERF_COUNT_SW_BPF_OUTPUT,
 		Bits:        unix.PerfBitWatermark,
 		Sample_type: unix.PERF_SAMPLE_RAW,
-		Wakeup:      uint32(watermark),
+		Wakeup:      uint32(1),
 	}
 
 	attr.Size = uint32(unsafe.Sizeof(attr))
 	fd, err := unix.PerfEventOpen(&attr, -1, cpu, -1, unix.PERF_FLAG_FD_CLOEXEC)
 	if err != nil {
+		fmt.Println("FAILED CREATE PERF EVENT")
 		return -1, fmt.Errorf("can't create perf event: %w", err)
 	}
 	return fd, nil
@@ -242,7 +245,7 @@ func newRingReader(meta *unix.PerfEventMmapPage, ring []byte) *ringReader {
 	}
 }
 
-func newPerfEventRing(cpu, pageCount, watermark int) (*perfEventRing, error){
+func newPerfEventRing(cpu, pageCount, watermark int, ctx uintptr) (*perfEventRing, error){
 /*
 	// TODO what's watermark
 	if watermark >= perCPUBuffer {
@@ -260,12 +263,17 @@ func newPerfEventRing(cpu, pageCount, watermark int) (*perfEventRing, error){
 		return nil, err
 	}
 
-	totalBytes := os.Getpagesize() * pageCount
+	totalBytes := (os.Getpagesize() * pageCount) + os.Getpagesize()
 
 	mmap, err := unix.Mmap(fd, 0, totalBytes, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
 		unix.Close(fd)
+		fmt.Println(err)
 		return nil, fmt.Errorf("can't mmap: %v", err)
+	}
+	if err := unix.IoctlSetInt(fd, unix.PERF_EVENT_IOC_ENABLE, 0); err != nil {
+		fmt.Println("FAILED IOCTL")
+		return nil, fmt.Errorf("enable perf event: %s", err)
 	}
 
 
@@ -274,15 +282,22 @@ func newPerfEventRing(cpu, pageCount, watermark int) (*perfEventRing, error){
 	// This use of unsafe.Pointer isn't explicitly sanctioned by the
 	// documentation, since a byte is smaller than sampledPerfEvent.
 	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&mmap[0]))
+	//if (ioctl(cpu_buf->fd, PERF_EVENT_IOC_ENABLE, 0) < 0) {
+	//	err = -errno;
+	//	pr_warn("failed to enable perf buffer event on cpu #%d: %s\n",
+	//		cpu, libbpf_strerror_r(err, msg, sizeof(msg)));
+	//	goto error;
+	//}
 
 	ring := &perfEventRing{
 		Fd:         fd,
 		cpu:        cpu,
 		mmap:       mmap,
-		ringReader: newRingReader(meta, mmap[meta.Data_offset:meta.Data_offset+meta.Data_size]), // TODO this probably not needed
+		ringReader: newRingReader(meta, mmap[meta.Data_offset:meta.Data_offset+meta.Data_size]),
+		ctx: ctx,
 	}
-	// TODO understand whats this
-	runtime.SetFinalizer(ring, (*perfEventRing).Close)
+	// TODO understand what do to with it
+	//runtime.SetFinalizer(ring, (*perfEventRing).Close)
 
 	return ring, nil
 }
@@ -329,6 +344,7 @@ func cpuForEvent(event *unix.EpollEvent) int {
 // Calling Close interrupts the function.
 // TODO errror return...
 // TODO change naming
+var m sync.Mutex
 func (pr *Reader) Read() error {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
@@ -339,13 +355,16 @@ func (pr *Reader) Read() error {
 
 	for {
 		if len(pr.epollRings) == 0 {
+			// blocking
 			nEvents, err := unix.EpollWait(pr.epollFd, pr.epollEvents, -1)
+			//fmt.Println("KAFAZZZZ")
 			if temp, ok := err.(temporaryError); ok && temp.Temporary() {
 				// Retry the syscall if we we're interrupted, see https://github.com/golang/go/issues/20400
 				continue
 			}
 
 			if err != nil {
+				//fmt.Println("ERRRRR")
 				return err
 			}
 
@@ -364,26 +383,71 @@ func (pr *Reader) Read() error {
 			}
 		}
 
+		///////////////
+		//c := pr.epollRings[len(pr.epollRings)-1].readExt(pr)
+		//if c {
+		//	continue
+		//}
+		///////////////
+
 		// Start at the last available event. The order in which we
 		// process them doesn't matter, and starting at the back allows
 		// resizing epollRings to keep track of processed rings.
-		err := readRecordFromRing(pr.epollRings[len(pr.epollRings)-1])
-		if err == errEOR {
-			// We've emptied the current ring buffer, process
-			// the next one.
-			pr.epollRings = pr.epollRings[:len(pr.epollRings)-1]
-			continue
+		for _, er := range pr.epollRings {
+			err := readRecordFromRing(er)
+			if err == errEOR {
+				// We've emptied the current ring buffer, process
+				// the next one.
+				//fmt.Println(" We've emptied the current ring buffer, proces")
+				//m.Lock()
+				//m.Unlock()
+				//continue
+			}
 		}
+		pr.epollRings = pr.epollRings[:0]
+		//pr.epollRings = make([]*perfEventRing, 0)
+		////////////////////////////////////////////////////////////
 
-		return nil
+		//err := readRecordFromRing(pr.epollRings[len(pr.epollRings)-1])
+		//if err == errEOR {
+		//	// We've emptied the current ring buffer, process
+		//	// the next one.
+		//	//m.Lock()
+		//	pr.epollRings = pr.epollRings[:len(pr.epollRings)-1]
+		//	//m.Unlock()
+		//	continue
+		//}
+
 	}
+	return nil
+}
+
+func (rr *ringReader) readExt(pr * Reader) bool {
+	defer rr.writeTail()
+	err := readRecordFromRing(pr.epollRings[len(pr.epollRings)-1])
+	if err == errEOR {
+		// We've emptied the current ring buffer, process
+		// the next one.
+		//fmt.Println(" We've emptied the current ring buffer, proces")
+		pr.epollRings = pr.epollRings[:len(pr.epollRings)-1]
+		cont := true
+		return cont
+	}
+	return false
 }
 
 
 func (rr *ringReader) writeTail() {
 	// Commit the new tail. This lets the kernel know that
 	// the ring buffer has been consumed.
+
+	//m.Lock()
+	//if &rr == nil  || &rr.meta == nil {
+	//	m.Unlock()
+	//	return
+	//}
 	atomic.StoreUint64(&rr.meta.Data_tail, rr.tail)
+	//m.Unlock()
 }
 
 func readLostRecords(rd io.Reader) (uint64, error) {
@@ -418,13 +482,14 @@ func readRawSample(rd io.Reader) ([]byte, error) {
 // NB: Has to be preceded by a call to ring.loadHead.
 func readRecordFromRing(ring *perfEventRing) (error) {
 	defer ring.writeTail()
-	return readRecord(ring, ring.cpu, uintptr(ring.Fd))
+	return readRecord(ring, ring.cpu, ring.ctx)
 }
 
 func readRecord(rd io.Reader, cpu int, ctx uintptr) error {
 	var header perfEventHeader
 	err := binary.Read(rd, nativeEndian, &header)
 	if err == io.EOF {
+		//fmt.Println("BIN READ EOF")
 		return errEOR
 	}
 
@@ -444,13 +509,13 @@ func readRecord(rd io.Reader, cpu int, ctx uintptr) error {
 		//return Record{CPU: cpu, RawSample: sample}, err
 
 	default:
-		return fmt.Errorf("unknown event received")
+		//return fmt.Errorf("unknown event received")
 	}
 	return nil
 }
 
 // TODO create object api to return
-func InitPerfBufV2(fd int, pageCount int /* maybe add opt struct... */) (pr *Reader, err error) {
+func InitPerfBufV2(fd int, pageCount int /* maybe add opt struct... */, m *BPFMap, ctx uintptr) (pr *Reader, err error) {
 	if pageCount < 1 {
 		return nil, fmt.Errorf("page count must be strictly positive")
 	}
@@ -490,7 +555,7 @@ func InitPerfBufV2(fd int, pageCount int /* maybe add opt struct... */) (pr *Rea
 
 	for i := 0; i < nCPU; i++ {
 		// TODO understand what is opts.Watermark
-		ring, err := newPerfEventRing(i, pageCount, /*opts.Watermark TODO understand watermark */ 0)
+		ring, err := newPerfEventRing(i, pageCount, /*opts.Watermark TODO understand watermark */ 0, ctx)
 
 		if errors.Is(err, unix.ENODEV) {
 			// The requested CPU is currently offline, skip it.
@@ -502,9 +567,14 @@ func InitPerfBufV2(fd int, pageCount int /* maybe add opt struct... */) (pr *Rea
 		if err != nil {
 			return nil, fmt.Errorf("failed to create perf ring for CPU %d: %v", i, err)
 		}
-
 		rings = append(rings, ring)
 		pauseFds = append(pauseFds, ring.Fd)
+
+		// TODO update on map here
+		e := m.Update(uint32(i), uint32(ring.Fd))
+		if e != nil {
+			fmt.Println(e)
+		}
 
 		if err := addToEpoll(epollFd, ring.Fd, len(rings)-1); err != nil {
 			return nil, err
@@ -529,6 +599,7 @@ func InitPerfBufV2(fd int, pageCount int /* maybe add opt struct... */) (pr *Rea
 	//}
 
 	pr = &Reader{
+		ctx: ctx,
 		origFd:   fd,
 		rings:   rings,
 		epollFd: epollFd,
@@ -544,7 +615,7 @@ func InitPerfBufV2(fd int, pageCount int /* maybe add opt struct... */) (pr *Rea
 		return nil, err
 	}
 	// TODO	reader.close()
-	runtime.SetFinalizer(pr, (*Reader).Close)
+	//runtime.SetFinalizer(pr, (*Reader).Close)
 	return pr, nil
 
 }

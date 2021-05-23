@@ -35,7 +35,6 @@ func hiHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	r := http.NewServeMux()
 	r.HandleFunc("/", hiHandler)
 

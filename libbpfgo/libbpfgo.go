@@ -39,7 +39,7 @@ void myPerfCallback(void *ctx, int cpu, void *data, __u32 size) {
 	static int i = 0;
 	myEvents[i].ptr = malloc(size);
 	myEvents[i].size = size;
-	myEvents[i].ctx = (int)ctx;
+	//myEvents[i].ctx = (int)ctx;
 
 	memcpy(myEvents[i].ptr, data, size);
 	if (i == 1000) {
@@ -85,7 +85,7 @@ struct ring_buffer * init_ring_buf(int map_fd) {
 struct perf_buffer * init_perf_buf(int map_fd, int page_cnt) {
     struct perf_buffer_opts pb_opts = {};
     struct perf_buffer *pb = NULL;
-    pb_opts.sample_cb = myPerfCallback;
+    pb_opts.sample_cb = perfCallback;
     pb_opts.lost_cb = perfLostCallback;
     __u64 ctx = map_fd;
     pb_opts.ctx = (void*)ctx;
@@ -750,7 +750,7 @@ func (rb *RingBuffer) poll() error {
 	return nil
 }
 
-func (m *Module) InitPerfBuf(mapName string, eventsChan chan []byte, lostChan chan uint64, pageCnt int) (*PerfBuffer, error) {
+func (m *Module) 	InitPerfBuf(mapName string, eventsChan chan []byte, lostChan chan uint64, pageCnt int) (*PerfBuffer, error) {
 	bpfMap, err := m.GetMap(mapName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init perf buffer: %v", err)
@@ -765,11 +765,10 @@ func (m *Module) InitPerfBuf(mapName string, eventsChan chan []byte, lostChan ch
 	//if pb == nil {
 	//	return nil, fmt.Errorf("failed to initialize perf buffer")
 	//}
-	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	pbv2, err := InitPerfBufV2(int(bpfMap.fd), pageCnt)
+	pb, _ := InitPerfBufV2(int(bpfMap.fd), pageCnt, bpfMap, ctx)
 
 	perfBuf := &PerfBuffer{
-		pbv2:   *pbv2,
+		pbv2:   *pb,
 		bpfMap: bpfMap,
 	}
 	m.perfBufs = append(m.perfBufs, perfBuf)
@@ -848,7 +847,6 @@ func (pb *PerfBuffer) poll() error {
 }
 
 func (pb *PerfBuffer) pollV2() error {
-	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	defer pb.wg.Done()
 
 	for {
@@ -856,11 +854,9 @@ func (pb *PerfBuffer) pollV2() error {
 		case <-pb.stop:
 			return nil
 		default:
-			fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 			err := pb.pbv2.Read()
 			if err != nil {
 				// TODO need to understand if it is EINTR
-				fmt.Println("GOT ERRORRRRR!!!!")
 				//if syscall.Errno(err) == syscall.EINTR {
 				//	continue
 				//}
