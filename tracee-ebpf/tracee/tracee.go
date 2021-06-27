@@ -195,8 +195,7 @@ type Tracee struct {
 	fileWrChannel     chan []byte
 	lostEvChannel     chan uint64
 	lostWrChannel     chan uint64
-	printer           eventPrinter
-	stats             statsStore
+	Stats             StatsStore
 	capturedFiles     map[string]int64
 	profiledFiles     map[string]profilerInfo
 	writtenFiles      map[string]string
@@ -206,6 +205,7 @@ type Tracee struct {
 	ParamTypes        map[int32]map[string]string
 	pidsInMntns       bucketsCache //record the first n PIDs (host) in each mount namespace, for internal usage
 	StackAddressesMap *bpf.BPFMap
+	eventsOut         chan external.Event
 }
 
 type counter int32
@@ -221,11 +221,11 @@ func (c *counter) Increment(amount ...int) {
 	atomic.AddInt32((*int32)(c), int32(sum))
 }
 
-type statsStore struct {
-	eventCounter  counter
-	errorCounter  counter
-	lostEvCounter counter
-	lostWrCounter counter
+type StatsStore struct {
+	EventCounter  counter
+	ErrorCounter  counter
+	LostEvCounter counter
+	LostWrCounter counter
 }
 
 // New creates a new Tracee instance based on a given valid Config
@@ -258,35 +258,9 @@ func New(cfg Config) (*Tracee, error) {
 	}
 	// create tracee
 	t := &Tracee{
-		config: cfg,
+		config:    cfg,
+		eventsOut: make(chan external.Event, 1000),
 	}
-	outf := os.Stdout
-	if t.config.Output.OutPath != "" {
-		dir := filepath.Dir(t.config.Output.OutPath)
-		os.MkdirAll(dir, 0755)
-		os.Remove(t.config.Output.OutPath)
-		outf, err = os.Create(t.config.Output.OutPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	errf := os.Stderr
-	if t.config.Output.ErrPath != "" {
-		dir := filepath.Dir(t.config.Output.ErrPath)
-		os.MkdirAll(dir, 0755)
-		os.Remove(t.config.Output.ErrPath)
-		errf, err = os.Create(t.config.Output.ErrPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	ContainerMode := (t.config.Filter.ContFilter.Enabled && t.config.Filter.ContFilter.Value) ||
-		(t.config.Filter.NewContFilter.Enabled && t.config.Filter.NewContFilter.Value)
-	printObj, err := newEventPrinter(t.config.Output.Format, ContainerMode, outf, errf)
-	if err != nil {
-		return nil, err
-	}
-	t.printer = printObj
 	t.eventsToTrace = make(map[int32]bool, len(t.config.Filter.EventsToTrace))
 	for _, e := range t.config.Filter.EventsToTrace {
 		// Map value is true iff events requested by the user
@@ -889,12 +863,19 @@ func (t *Tracee) writeProfilerStats(wr io.Writer) error {
 	return nil
 }
 
+func (t *Tracee) Consume() (<-chan external.Event, error) {
+	if t.eventsOut == nil {
+		return nil, fmt.Errorf("channel not ready to be consume")
+	}
+	return t.eventsOut, nil
+}
+
 // Run starts the trace. it will run until interrupted
 func (t *Tracee) Run() error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	done := make(chan struct{})
-	t.printer.Preamble()
+	//t.printer.Preamble()
 	t.eventsPerfMap.Start()
 	t.fileWrPerfMap.Start()
 	go t.processLostEvents()
@@ -903,9 +884,9 @@ func (t *Tracee) Run() error {
 	<-sig
 	t.eventsPerfMap.Stop()
 	t.fileWrPerfMap.Stop()
-	t.printer.Epilogue(t.stats)
+	//t.printer.Epilogue(t.Stats)
 
-	// capture profiler stats
+	// capture profiler Stats
 	if t.config.Capture.Profile {
 		f, err := os.Create(filepath.Join(t.config.Capture.OutputPath, "tracee.profile"))
 		if err != nil {
@@ -957,7 +938,7 @@ func (t *Tracee) Close() {
 	if t.bpfModule != nil {
 		t.bpfModule.Close()
 	}
-	t.printer.Close()
+	//t.printer.Close()
 }
 
 func boolToUInt32(b bool) uint32 {
@@ -994,8 +975,8 @@ func CopyFileByPath(src, dst string) error {
 }
 
 func (t *Tracee) handleError(err error) {
-	t.stats.errorCounter.Increment()
-	t.printer.Error(err)
+	t.Stats.ErrorCounter.Increment()
+	//t.printer.Error(err)
 }
 
 // shouldProcessEvent decides whether or not to drop an event before further processing it
@@ -1056,7 +1037,7 @@ func (t *Tracee) shouldProcessEvent(e RawEvent) bool {
 	return true
 }
 
-func (t *Tracee) processEvent(ctx *context, args map[argTag]interface{}) error {
+func (t *Tracee) processEvent(ctx *Context, args map[argTag]interface{}) error {
 	switch ctx.EventID {
 
 	//capture written files
@@ -1202,7 +1183,7 @@ func (t *Tracee) shouldPrintEvent(e RawEvent) bool {
 	return true
 }
 
-func (t *Tracee) prepareArgsForPrint(ctx *context, args map[argTag]interface{}) error {
+func (t *Tracee) prepareArgsForPrint(ctx *Context, args map[argTag]interface{}) error {
 	for key, arg := range args {
 		if ptr, isUintptr := arg.(uintptr); isUintptr {
 			args[key] = fmt.Sprintf("0x%X", ptr)
@@ -1326,11 +1307,11 @@ func (t *Tracee) prepareArgsForPrint(ctx *context, args map[argTag]interface{}) 
 	return nil
 }
 
-// context struct contains common metadata that is collected for all types of events
+// Context struct contains common metadata that is collected for all types of events
 // it is used to unmarshal binary data and therefore should match (bit by bit) to the `context_t` struct in the ebpf code.
 // NOTE: Integers want to be aligned in memory, so if changing the format of this struct
 // keep the 1-byte 'Argnum' as the final parameter before the padding (if padding is needed).
-type context struct {
+type Context struct {
 	Ts       uint64
 	Pid      uint32
 	Tid      uint32
@@ -1354,7 +1335,7 @@ type context struct {
 func (t *Tracee) processLostEvents() {
 	for {
 		lost := <-t.lostEvChannel
-		t.stats.lostEvCounter.Increment(int(lost))
+		t.Stats.LostEvCounter.Increment(int(lost))
 	}
 }
 
@@ -1487,7 +1468,7 @@ func (t *Tracee) processFileWrites() {
 				continue
 			}
 		case lost := <-t.lostWrChannel:
-			t.stats.lostWrCounter.Increment(int(lost))
+			t.Stats.LostWrCounter.Increment(int(lost))
 		}
 	}
 }

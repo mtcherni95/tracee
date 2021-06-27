@@ -26,13 +26,7 @@ func (t *Tracee) runEventPipeline(done <-chan struct{}) error {
 	}
 	errcList = append(errcList, errc)
 
-	printEventChan, errc, err := t.prepareEventForPrint(done, processedEventChan)
-	if err != nil {
-		return err
-	}
-	errcList = append(errcList, errc)
-
-	errc, err = t.printEvent(done, printEventChan)
+	errc, err = t.prepareEventForPrint(done, processedEventChan)
 	if err != nil {
 		return err
 	}
@@ -43,7 +37,7 @@ func (t *Tracee) runEventPipeline(done <-chan struct{}) error {
 }
 
 type RawEvent struct {
-	Ctx      context
+	Ctx      Context
 	RawArgs  map[argTag]interface{}
 	ArgsTags []argTag
 }
@@ -56,7 +50,7 @@ func (t *Tracee) decodeRawEvent(done <-chan struct{}) (<-chan RawEvent, <-chan e
 		defer close(errc)
 		for dataRaw := range t.eventsChannel {
 			dataBuff := bytes.NewBuffer(dataRaw)
-			var ctx context
+			var ctx Context
 			err := binary.Read(dataBuff, binary.LittleEndian, &ctx)
 			if err != nil {
 				errc <- err
@@ -139,11 +133,11 @@ func (t *Tracee) getStackAddresses(StackID uint32) ([]uint64, error) {
 	return StackAddresses[0:stackCounter], nil
 }
 
-func (t *Tracee) prepareEventForPrint(done <-chan struct{}, in <-chan RawEvent) (<-chan external.Event, <-chan error, error) {
-	out := make(chan external.Event, 1000)
+func (t *Tracee) prepareEventForPrint(done <-chan struct{}, in <-chan RawEvent) (<-chan error, error) {
+	//out := make(chan external.Event, 1000)
 	errc := make(chan error, 1)
 	go func() {
-		defer close(out)
+		defer close(t.eventsOut)
 		defer close(errc)
 		for rawEvent := range in {
 			if !t.shouldPrintEvent(rawEvent) {
@@ -186,22 +180,10 @@ func (t *Tracee) prepareEventForPrint(done <-chan struct{}, in <-chan RawEvent) 
 				continue
 			}
 			select {
-			case out <- evt:
+			case t.eventsOut <- evt:
 			case <-done:
 				return
 			}
-		}
-	}()
-	return out, errc, nil
-}
-
-func (t *Tracee) printEvent(done <-chan struct{}, in <-chan external.Event) (<-chan error, error) {
-	errc := make(chan error, 1)
-	go func() {
-		defer close(errc)
-		for printEvent := range in {
-			t.stats.eventCounter.Increment()
-			t.printer.Print(printEvent)
 		}
 	}()
 	return errc, nil

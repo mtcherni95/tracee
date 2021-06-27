@@ -19,7 +19,7 @@ type eventPrinter interface {
 	// Preamble prints something before event printing begins (one time)
 	Preamble()
 	// Epilogue prints something after event printing ends (one time)
-	Epilogue(stats statsStore)
+	Epilogue(stats StatsStore)
 	// Print prints a single event
 	Print(event external.Event)
 	// Error prints a single error
@@ -71,7 +71,7 @@ func newEventPrinter(kind string, containerMode bool, out io.WriteCloser, err io
 	return res, nil
 }
 
-func newEvent(ctx context, argMetas []external.ArgMeta, args []interface{}, StackAddresses []uint64) (external.Event, error) {
+func newEvent(ctx Context, argMetas []external.ArgMeta, args []interface{}, StackAddresses []uint64) (external.Event, error) {
 	e := external.Event{
 		Timestamp:           float64(ctx.Ts) / 1000000.0,
 		ProcessID:           int(ctx.Pid),
@@ -157,7 +157,7 @@ func (p tableEventPrinter) Error(err error) {
 	fmt.Fprintf(p.err, "%v\n", err)
 }
 
-func (p tableEventPrinter) Epilogue(stats statsStore) {
+func (p tableEventPrinter) Epilogue(stats StatsStore) {
 	fmt.Println()
 	fmt.Fprintf(p.out, "End of events stream\n")
 	fmt.Fprintf(p.out, "Stats: %+v\n", stats)
@@ -206,7 +206,7 @@ func (p templateEventPrinter) Print(event external.Event) {
 	}
 }
 
-func (p templateEventPrinter) Epilogue(stats statsStore) {}
+func (p templateEventPrinter) Epilogue(stats StatsStore) {}
 
 func (p templateEventPrinter) Close() {
 }
@@ -236,7 +236,7 @@ func (p jsonEventPrinter) Error(e error) {
 	fmt.Fprintln(p.err, string(eBytes))
 }
 
-func (p jsonEventPrinter) Epilogue(stats statsStore) {}
+func (p jsonEventPrinter) Epilogue(stats StatsStore) {}
 
 func (p jsonEventPrinter) Close() {
 }
@@ -270,7 +270,7 @@ func (p *gobEventPrinter) Error(e error) {
 	_ = p.errEnc.Encode(e)
 }
 
-func (p *gobEventPrinter) Epilogue(stats statsStore) {}
+func (p *gobEventPrinter) Epilogue(stats StatsStore) {}
 
 func (p gobEventPrinter) Close() {
 }

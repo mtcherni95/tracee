@@ -3,6 +3,9 @@ package main
 import (
 	"embed"
 	"fmt"
+	"github.com/aquasecurity/tracee/tracee-ebpf/tracee/broker"
+	"github.com/aquasecurity/tracee/tracee-ebpf/tracee/streamers"
+	cmap "github.com/orcaman/concurrent-map"
 	"io"
 	"io/ioutil"
 	"log"
@@ -81,6 +84,21 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("error creating Tracee: %v", err)
 			}
+
+			iostreamer, err := streamers.NewIOStreamer(cfg)
+			if err != nil {
+				return fmt.Errorf("failed creating IOStreamer: %w", err)
+			}
+			b := broker.Broker{Streamers: cmap.New()}
+			if err := b.Register(iostreamer); err != nil {
+				return fmt.Errorf("failed to register IOStreamer: %w", err)
+			}
+			b.ChanEvents, err = t.Consume()
+			if err != nil {
+				return fmt.Errorf("failed to consume event channels: %w", err)
+			}
+			b.Start(&t.Stats)
+			defer b.Stop(&t.Stats)
 			return t.Run()
 		},
 		Flags: []cli.Flag{
