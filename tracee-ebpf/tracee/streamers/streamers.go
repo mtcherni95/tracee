@@ -17,7 +17,6 @@ import (
 
 type Streamer interface {
 	// TODO too many functions
-	Stream(*external.Event)
 	Close()
 	Preamble()
 	Epilogue(store tracee.StatsStore)
@@ -25,6 +24,8 @@ type Streamer interface {
 	Init() error
 	SetId(uint64)
 	Id() uint64
+	SetEventsChan(<-chan *external.Event)
+	Run()
 }
 
 type tableEventPrinter struct {
@@ -33,6 +34,7 @@ type tableEventPrinter struct {
 	verbose       bool
 	containerMode bool
 	id            uint64
+	eventsChan    <-chan *external.Event
 }
 
 type templateEventPrinter struct {
@@ -42,28 +44,59 @@ type templateEventPrinter struct {
 	templatePath  string
 	templateObj   **template.Template
 	id            uint64
+	eventsChan    <-chan *external.Event
 }
 
 type jsonEventPrinter struct {
-	out io.WriteCloser
-	err io.WriteCloser
-	id  uint64
+	out        io.WriteCloser
+	err        io.WriteCloser
+	id         uint64
+	eventsChan <-chan *external.Event
 }
 
 // gobEventPrinter is printing events using golang's builtin Gob serializer
 type gobEventPrinter struct {
-	out    io.WriteCloser
-	err    io.WriteCloser
-	outEnc *gob.Encoder
-	errEnc *gob.Encoder
-	id     uint64
+	out        io.WriteCloser
+	err        io.WriteCloser
+	outEnc     *gob.Encoder
+	errEnc     *gob.Encoder
+	id         uint64
+	eventsChan <-chan *external.Event
+}
+
+func (p *templateEventPrinter) Run() {
+	for {
+		select {
+		case e, ok := <-p.eventsChan:
+			if !ok {
+				// channel closed
+				break
+			}
+			p.Stream(e)
+		}
+	}
 }
 
 func (p *templateEventPrinter) SetId(id uint64) {
 	p.id = id
 }
+func (p *templateEventPrinter) SetEventsChan(eventsChan <-chan *external.Event) {
+	p.eventsChan = eventsChan
+}
 func (p *templateEventPrinter) Id() uint64 {
 	return p.id
+}
+func (p *tableEventPrinter) Run() {
+	for {
+		select {
+		case e, ok := <-p.eventsChan:
+			if !ok {
+				// channel closed
+				break
+			}
+			p.Stream(e)
+		}
+	}
 }
 func (p *tableEventPrinter) SetId(id uint64) {
 	p.id = id
@@ -71,17 +104,50 @@ func (p *tableEventPrinter) SetId(id uint64) {
 func (p *tableEventPrinter) Id() uint64 {
 	return p.id
 }
+func (p *tableEventPrinter) SetEventsChan(eventsChan <-chan *external.Event) {
+	p.eventsChan = eventsChan
+}
 func (p *jsonEventPrinter) SetId(id uint64) {
 	p.id = id
 }
 func (p *jsonEventPrinter) Id() uint64 {
 	return p.id
 }
+func (p *jsonEventPrinter) SetEventsChan(eventsChan <-chan *external.Event) {
+	p.eventsChan = eventsChan
+}
+func (p *jsonEventPrinter) Run() {
+	for {
+		select {
+		case e, ok := <-p.eventsChan:
+			if !ok {
+				// channel closed
+				break
+			}
+			p.Stream(e)
+		}
+	}
+}
 func (p *gobEventPrinter) SetId(id uint64) {
 	p.id = id
 }
 func (p *gobEventPrinter) Id() uint64 {
 	return p.id
+}
+func (p *gobEventPrinter) SetEventsChan(eventsChan <-chan *external.Event) {
+	p.eventsChan = eventsChan
+}
+func (p *gobEventPrinter) Run() {
+	for {
+		select {
+		case e, ok := <-p.eventsChan:
+			if !ok {
+				// channel closed
+				break
+			}
+			p.Stream(e)
+		}
+	}
 }
 func NewIOStreamer(cfg tracee.Config) (Streamer, error) {
 	format := cfg.Output.Format

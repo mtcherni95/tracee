@@ -89,7 +89,9 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("failed creating IOStreamer: %w", err)
 			}
-			b := broker.Broker{Streamers: cmap.New()}
+			b := broker.Broker{
+				Streamers:       cmap.New(),
+				ChanPerStreamer: cmap.New()}
 			if err := b.Register(iostreamer); err != nil {
 				return fmt.Errorf("failed to register IOStreamer: %w", err)
 			}
